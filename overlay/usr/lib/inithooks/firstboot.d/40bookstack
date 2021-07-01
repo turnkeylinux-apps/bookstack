@@ -1,0 +1,8 @@
+#!/bin/bash -e
+# set bookstack domain, admin password & email
+
+. /etc/default/inithooks
+
+[ -e $INITHOOKS_CONF ] && . $INITHOOKS_CONF
+
+$INITHOOKS_PATH/bin/bookstack.py --pass="$APP_PASS" --email="$APP_EMAIL" --domain="$APP_DOMAIN"

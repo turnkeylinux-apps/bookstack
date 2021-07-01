@@ -1,0 +1,50 @@
+#!/bin/bash -ex
+
+DB_NAME=bookstack
+DB_USER=bookstack
+DB_PASS=$(mcookie)
+
+ADMIN_MAIL="admin@example.com"
+ADMIN_PASS=turnkey1
+APP_DOMAIN=www.example.com
+
+SRC=/usr/local/src
+WEBROOT=/var/www/bookstack
+CONF=$WEBROOT/.env
+
+# initial install
+git clone https://github.com/BookStackApp/BookStack.git \
+    --branch release --single-branch --depth=1 $WEBROOT
+chown -R www-data:www-data $WEBROOT
+cd $WEBROOT
+turnkey-composer install --no-dev
+
+# instal config setup
+cp .env.example .env
+sed -i "\|^DB_DATABASE=| s|=.*|=$DB_NAME|" $CONF
+sed -i "\|^DB_USERNAME=| s|=.*|=$DB_USER|" $CONF
+sed -i "\|^DB_PASSWORD=| s|=.*|=$DB_PASS|" $CONF
+sed -i "\|^MAIL_DRIVER=| s|=.*|=sendmail|" $CONF
+sed -i "\|^MAIL_FROM_NAME=| s|=.*|=\"TurnKey BookStack\"|" $CONF
+
+# set up DB
+service mysql start
+mysqladmin create $DB_NAME
+mysql --batch --execute "grant all privileges on $DB_NAME.* to $DB_USER@localhost identified by '$DB_PASS'; flush privileges;"
+
+# update turnkey-artisan command and finailse install
+BIN=/usr/local/bin
+sed -i "\|^export WEBROOT=| s|=.*|=\"$WEBROOT\"|" $BIN/turnkey-artisan
+turnkey-artisan key:generate --force --no-interaction
+turnkey-artisan migrate --force --no-interaction
+
+# leverage inithook to do initial admin user config & domain
+#/usr/lib/inithooks/bin/bookstack.py --email="$ADMIN_EMAIL" --pass="$ADMIN_PASS" --domain="$APP_DOMAIN"
+
+# apache config
+a2dissite 000-default
+a2ensite bookstack
+a2enmod rewrite
+
+# finish up
+service mysql stop
