@@ -20,12 +20,13 @@ cd $WEBROOT
 turnkey-composer install --no-dev
 
 # instal config setup
-cp .env.example .env
+cp $CONF.example $CONF
 sed -i "\|^DB_DATABASE=| s|=.*|=$DB_NAME|" $CONF
 sed -i "\|^DB_USERNAME=| s|=.*|=$DB_USER|" $CONF
 sed -i "\|^DB_PASSWORD=| s|=.*|=$DB_PASS|" $CONF
 sed -i "\|^MAIL_DRIVER=| s|=.*|=sendmail|" $CONF
 sed -i "\|^MAIL_FROM_NAME=| s|=.*|=\"TurnKey BookStack\"|" $CONF
+chown www-data:www-data $CONF
 
 # set up DB
 service mysql start
