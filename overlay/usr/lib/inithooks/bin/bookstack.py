@@ -11,10 +11,12 @@ import sys
 import getopt
 import bcrypt
 import subprocess
+from subprocess import Popen, PIPE, STDOUT
+
 from mysqlconf import MySQL
 
-from dialog_wrapper import Dialog
-import inithooks_cache
+from libinithooks.dialog_wrapper import Dialog
+from libinithooks import inithooks_cache
 
 
 def usage(s=None):
@@ -45,7 +47,7 @@ def validate_url(url, interactive=True):
 def main():
     try:
         opts, args = getopt.gnu_getopt(sys.argv[1:], "h",
-                                       ['help', 'pass=', 'email='])
+                                       ['help', 'pass=', 'email=', 'domain='])
     except getopt.GetoptError as e:
         usage(e)
 
@@ -81,10 +83,10 @@ def main():
         if 'd' not in locals():
             d = Dialog('TurnKey Linux - First boot configuration')
         while True:
-            domain = d.get_domain(
+            domain = d.get_input(
                 "BookStack Domain",
                 "Enter schema and domain to use for BookStack.",
-                "https://example.com")
+                "https://www.example.com")
             url, msg = validate_url(domain, True)
             if not url:
                 d.error(msg)
@@ -100,18 +102,33 @@ def main():
 
     salt = bcrypt.gensalt()
     hashpass = bcrypt.hashpw(password.encode('utf8'), salt).decode('utf8')
-    
+
     m = MySQL()
-    m.execute('UPDATE bookstack.users SET password=%s WHERE id=1;', (hashpass,))
-    m.execute('UPDATE bookstack.user SET email=%s WHERE id=1;', (email,))
+    m.execute(
+            'UPDATE bookstack.users SET password=%s WHERE id=1;', (hashpass,))
+    m.execute('UPDATE bookstack.users SET email=%s WHERE id=1;', (email,))
 
     conf = '/var/www/bookstack/.env'
     with open(conf, 'r') as fob:
         for line in fob.readlines():
             if line.startswith('APP_URL='):
-                old_url = line[8:]
+                old_url = line[8:].rstrip()
+    subprocess.run(['sed', '-i', f'/^APP_URL/s|=.*|={domain}|', conf])
+    artisan = '/usr/local/bin/turnkey-artisan'
+    p = Popen([artisan, 'bookstack:update-url', old_url, domain],
+              stdout=PIPE, stderr=STDOUT, stdin=PIPE, text=True)
+    p.communicate('yes\nyes\n')
+    if p.returncode != 0:
+        print(f'setting bookstack domain failed:\n{p.stdout}',
+              file=sys.stderr)
+        sys.exit(1)
+    p = subprocess.run([artisan, 'cache:clear'],
+                       stdout=PIPE, stderr=STDOUT, text=True)
+    if p.returncode != 0:
+        print(f'clearing bookstack cache failed:\n{p.stdout}',
+              file=sys.stderr)
+        sys.exit(1)
 
-# /usr/local/bin/turnkey-artisan bookstack:update-url <oldUrl> <newUrl>
 
 if __name__ == "__main__":
     main()
