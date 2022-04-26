@@ -29,19 +29,19 @@ def usage(s=None):
 
 def validate_url(url, interactive=True):
     try:
-        schema, dom = url.split('//')
+        schema, dom = url.split('://', 1)
     except ValueError:
         if interactive:
             return (False, "Must include schema and domain separated by '//'.")
         else:
-            schema = 'https:'
+            schema = 'https'
             dom = url
-    if schema != "https:" and schema != "http:":
+    if schema not in ["https", "http"]:
         if interactive:
-            return (False, "Schema must be 'https:' or 'http:'.")
+            return (False, "Schema must be 'https' or 'http'.")
         else:
-            schema = 'https:'
-    return ('//'.join([schema, dom.rstrip('/')]), None)
+            schema = 'https'
+    return (f"{schema}://{dom.rstrip('/')}", None)
 
 
 def main():
