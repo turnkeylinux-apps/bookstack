@@ -1,6 +1,6 @@
 turnkey-bookstack-17.0 (1) turnkey; urgency=low
 
-  * Initial release includes v21.05.2; installed via (shallow) git clone of
+  * Initial release includes v22.03.1; installed via (shallow) git clone of
     upstream source code; built on a TurnKey (v17.0) LAMP base.
 
   * Note: Please refer to turnkey-core's 17.0 changelog for changes common to all
