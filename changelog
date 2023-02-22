@@ -1,3 +1,11 @@
+turnkey-bookstack-17.2 (1) turnkey; urgency=low
+
+  * Update BookStack to latest stable: v23.01.1.
+
+  * Rebuild with PHP 8.1 - closes #1805.
+
+ -- Jeremy Davis <jeremy@turnkeylinux.org>  Mon, 20 Feb 2023 05:05:09 +0000
+
 turnkey-bookstack-17.1 (1) turnkey; urgency=low
 
   * Updated all Debian packages to latest.
