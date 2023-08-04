@@ -1,8 +1,9 @@
 #include <turnkey/base>
-#include <turnkey/lamp81>
+#include <turnkey/lamp>
 
 python3-bcrypt
-php8.1-xml
-php8.1-curl
-php8.1-gd
-php8.1-mbstring
+php-xml
+php-curl
+php-gd
+php-mbstring
+libapache2-mod-security2
