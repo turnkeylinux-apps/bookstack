@@ -1,0 +1,136 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+webroot=/var/www/bookstack
+key=/usr/share/keyrings/bookstack-upstream.asc
+fingerprint=98F8536570C9A3745BFA8BAF116094FE15AE65C0
+temporary=
+maintenance=false
+
+cleanup() {
+    local status=$?
+    if [[ $maintenance == true ]]; then
+        /usr/local/bin/turnkey-artisan up >/dev/null 2>&1 || true
+    fi
+    if [[ -n $temporary && -d $temporary ]]; then
+        rm -rf -- "$temporary"
+    fi
+    exit "$status"
+}
+trap cleanup EXIT
+
+fail() {
+    echo "bookstack-update: $*" >&2
+    exit 1
+}
+
+prepare_verifier() {
+    temporary=$(mktemp -d /run/bookstack-update.XXXXXX)
+    chmod 0700 "$temporary"
+    export GNUPGHOME=$temporary/gnupg
+    mkdir -m 0700 "$GNUPGHOME"
+    gpg --batch --quiet --import "$key"
+    actual=$(gpg --batch --with-colons --fingerprint "$fingerprint" |
+        awk -F: '$1 == "fpr" {print $10; exit}')
+    [[ $actual == "$fingerprint" ]] || fail 'upstream signing key differs'
+}
+
+verify_installed() {
+    local version commit tagged
+    version=$(<"$webroot/version")
+    commit=$(git -C "$webroot" rev-parse HEAD)
+    tagged=$(git -C "$webroot" rev-parse "$version^{commit}")
+    [[ $commit == "$tagged" ]] || fail 'installed commit does not match version tag'
+    prepare_verifier
+    git -C "$webroot" verify-tag "$version" >/dev/null 2>&1 ||
+        fail "tag $version is not signed by the pinned upstream key"
+    printf 'installed_version=%s\ninstalled_commit=%s\nsignature_fingerprint=%s\n' \
+        "$version" "$commit" "$fingerprint"
+}
+
+load_candidate() {
+    local remote refs
+    remote=$(git -C "$webroot" remote get-url origin)
+    [[ $remote == https://source.bookstackapp.com/bookstack.git ]] ||
+        fail "unexpected upstream remote: $remote"
+
+    prepare_verifier
+    refs=$temporary/refs
+    git ls-remote "$remote" refs/heads/release 'refs/tags/v*' >"$refs"
+    candidate_commit=$(awk '$2 == "refs/heads/release" {print $1}' "$refs")
+    [[ $candidate_commit =~ ^[0-9a-f]{40}$ ]] ||
+        fail 'stable release commit could not be resolved'
+    candidate_version=$(awk -v commit="$candidate_commit" \
+        '$1 == commit && $2 ~ /^refs\/tags\/v.*\^\{\}$/ {
+            sub(/^refs\/tags\//, "", $2); sub(/\^\{\}$/, "", $2); print $2
+        }' "$refs" | sort -V | tail -n 1)
+    [[ $candidate_version =~ ^v[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] ||
+        fail 'stable release has no annotated version tag'
+
+    git -C "$temporary" init --quiet verify
+    git -C "$temporary/verify" remote add origin "$remote"
+    git -C "$temporary/verify" fetch --quiet --depth=1 origin \
+        "refs/tags/$candidate_version:refs/tags/$candidate_version"
+    [[ $(git -C "$temporary/verify" rev-parse \
+        "$candidate_version^{commit}") == "$candidate_commit" ]] ||
+        fail 'stable tag and branch commit differ'
+    git -C "$temporary/verify" verify-tag "$candidate_version" \
+        >/dev/null 2>&1 ||
+        fail "tag $candidate_version is not signed by the pinned upstream key"
+}
+
+check_update() {
+    local current_version current_commit
+    current_version=$(<"$webroot/version")
+    current_commit=$(git -C "$webroot" rev-parse HEAD)
+    load_candidate
+    printf 'current_version=%s\ncurrent_commit=%s\n' \
+        "$current_version" "$current_commit"
+    printf 'candidate_version=%s\ncandidate_commit=%s\n' \
+        "$candidate_version" "$candidate_commit"
+    if [[ $current_commit == "$candidate_commit" ]]; then
+        echo 'update_available=no'
+    else
+        echo 'update_available=yes'
+    fi
+}
+
+apply_update() {
+    local fetched
+    [[ $(id -u) -eq 0 ]] || fail 'updates must run as root'
+    git -C "$webroot" diff --quiet || fail 'tracked source changes are present'
+    git -C "$webroot" diff --cached --quiet ||
+        fail 'staged source changes are present'
+    load_candidate
+
+    /usr/local/bin/turnkey-artisan down --retry=30
+    maintenance=true
+    runuser --user www-data -- git -C "$webroot" fetch origin \
+        "refs/tags/$candidate_version:refs/tags/$candidate_version"
+    git -C "$webroot" verify-tag "$candidate_version" >/dev/null 2>&1 ||
+        fail "fetched tag $candidate_version failed signature verification"
+    runuser --user www-data -- git -C "$webroot" fetch origin release
+    fetched=$(git -C "$webroot" rev-parse FETCH_HEAD)
+    [[ $fetched == "$candidate_commit" ]] ||
+        fail 'stable release changed during update; retry after review'
+    runuser --user www-data -- git -C "$webroot" merge --ff-only FETCH_HEAD
+    (cd "$webroot" && turnkey-composer install --no-dev --no-interaction)
+    /usr/local/bin/turnkey-artisan migrate --force --no-interaction
+    /usr/local/bin/turnkey-artisan cache:clear
+    /usr/local/bin/turnkey-artisan config:clear
+    /usr/local/bin/turnkey-artisan view:clear
+    [[ $(git -C "$webroot" rev-parse HEAD) == "$candidate_commit" ]] ||
+        fail 'updated source commit differs from verified candidate'
+    printf 'updated_version=%s\nupdated_commit=%s\n' \
+        "$(<"$webroot/version")" "$candidate_commit"
+}
+
+case ${1:-} in
+    --check) check_update ;;
+    --apply) apply_update ;;
+    --verify-installed) verify_installed ;;
+    *)
+        echo 'Usage: bookstack-update --check|--apply|--verify-installed' >&2
+        exit 2
+        ;;
+esac

@@ -1,0 +1,1 @@
+* * * * * www-data /usr/local/bin/turnkey-artisan schedule:run --no-interaction >/dev/null 2>&1

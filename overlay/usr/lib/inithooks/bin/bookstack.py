@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Set BookStack admin password and email
+"""Set the BookStack administrator account and application URL.
 
 Option:
     --pass=     unless provided, will ask interactively
@@ -9,11 +9,11 @@ Option:
 
 import sys
 import getopt
-import bcrypt
+import os
+import stat
 import subprocess
-from subprocess import Popen, PIPE, STDOUT
-
-from mysqlconf import MySQL
+import tempfile
+from urllib.parse import urlsplit
 
 from libinithooks.dialog_wrapper import Dialog
 from libinithooks import inithooks_cache
@@ -28,20 +28,82 @@ def usage(s=None):
 
 
 def validate_url(url, interactive=True):
-    try:
-        schema, dom = url.split('://', 1)
-    except ValueError:
+    url = url.strip()
+    if '://' not in url:
         if interactive:
             return (False, "Must include schema and domain separated by '//'.")
-        else:
-            schema = 'https'
-            dom = url
-    if schema not in ["https", "http"]:
-        if interactive:
-            return (False, "Schema must be 'https' or 'http'.")
-        else:
-            schema = 'https'
-    return (f"{schema}://{dom.rstrip('/')}", None)
+        url = f'https://{url}'
+
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return (False, 'Domain or port is invalid.')
+
+    if parsed.scheme not in ('https', 'http'):
+        return (False, "Schema must be 'https' or 'http'.")
+    if not parsed.hostname or parsed.username or parsed.password:
+        return (False, 'A domain without user information is required.')
+    if parsed.path not in ('', '/') or parsed.query or parsed.fragment:
+        return (False, 'Enter a base URL without a path, query or fragment.')
+
+    netloc = parsed.hostname
+    if ':' in netloc and not netloc.startswith('['):
+        netloc = f'[{netloc}]'
+    if port is not None:
+        netloc = f'{netloc}:{port}'
+    return (f'{parsed.scheme}://{netloc}', None)
+
+
+def replace_env_value(path, key, value):
+    if '\n' in value or '\r' in value:
+        raise ValueError('Environment values must be a single line.')
+
+    source_stat = os.stat(path)
+    with open(path, 'r', encoding='utf-8') as source:
+        lines = source.readlines()
+
+    prefix = f'{key}='
+    replaced = False
+    for index, line in enumerate(lines):
+        if line.startswith(prefix):
+            lines[index] = f'{prefix}{value}\n'
+            replaced = True
+            break
+    if not replaced:
+        raise RuntimeError(f'{key} is missing from {path}')
+
+    descriptor, temporary = tempfile.mkstemp(
+        prefix='.env.', dir=os.path.dirname(path), text=True)
+    try:
+        os.fchmod(descriptor, stat.S_IMODE(source_stat.st_mode))
+        os.fchown(descriptor, source_stat.st_uid, source_stat.st_gid)
+        with os.fdopen(descriptor, 'w', encoding='utf-8') as target:
+            target.writelines(lines)
+            target.flush()
+            os.fsync(target.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.close(descriptor)
+        except OSError:
+            pass
+        try:
+            os.unlink(temporary)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def run_artisan(*arguments):
+    command = ['/usr/local/bin/turnkey-artisan', *arguments]
+    result = subprocess.run(command, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, text=True)
+    if result.returncode != 0:
+        print(f"BookStack command failed: {' '.join(arguments)}\n"
+              f'{result.stdout}', file=sys.stderr)
+        sys.exit(result.returncode)
+    return result.stdout
 
 
 def main():
@@ -96,38 +158,28 @@ def main():
                 break
 
     domain, msg = validate_url(domain, False)
+    if not domain:
+        usage(msg)
 
     inithooks_cache.write('APP_DOMAIN', domain)
     inithooks_cache.write('APP_EMAIL', email)
 
-    salt = bcrypt.gensalt()
-    hashpass = bcrypt.hashpw(password.encode('utf8'), salt).decode('utf8')
-
-    m = MySQL()
-    m.execute(
-            'UPDATE bookstack.users SET password=%s WHERE id=1;', (hashpass,))
-    m.execute('UPDATE bookstack.users SET email=%s WHERE id=1;', (email,))
-
     conf = '/var/www/bookstack/.env'
-    with open(conf, 'r') as fob:
-        for line in fob.readlines():
+    old_url = None
+    with open(conf, 'r', encoding='utf-8') as fob:
+        for line in fob:
             if line.startswith('APP_URL='):
                 old_url = line[8:].rstrip()
-    subprocess.run(['sed', '-i', f'/^APP_URL/s|=.*|={domain}|', conf])
-    artisan = '/usr/local/bin/turnkey-artisan'
-    p = Popen([artisan, 'bookstack:update-url', old_url, domain],
-              stdout=PIPE, stderr=STDOUT, stdin=PIPE, text=True)
-    p.communicate('yes\nyes\n')
-    if p.returncode != 0:
-        print(f'setting bookstack domain failed:\n{p.stdout}',
-              file=sys.stderr)
-        sys.exit(1)
-    p = subprocess.run([artisan, 'cache:clear'],
-                       stdout=PIPE, stderr=STDOUT, text=True)
-    if p.returncode != 0:
-        print(f'clearing bookstack cache failed:\n{p.stdout}',
-              file=sys.stderr)
-        sys.exit(1)
+                break
+    if old_url is None:
+        usage('APP_URL is missing from the BookStack environment')
+
+    run_artisan('bookstack:create-admin', '--initial', f'--email={email}',
+                '--name=Admin', f'--password={password}')
+    replace_env_value(conf, 'APP_URL', domain)
+    if old_url != domain:
+        run_artisan('bookstack:update-url', old_url, domain, '--force')
+    run_artisan('cache:clear')
 
 
 if __name__ == "__main__":
