@@ -37,10 +37,12 @@ grep -Fxq 'VERSION_CODENAME=trixie' /etc/os-release
 grep -Eq '^turnkey-bookstack-19\.0' /etc/turnkey_version
 
 version=$(< /var/www/bookstack/version)
-commit=$(git -C /var/www/bookstack rev-parse HEAD)
+commit=$(git -c safe.directory=/var/www/bookstack \
+    -C /var/www/bookstack rev-parse HEAD)
 [[ $version == v26.05.4 ]]
 [[ $commit == cec78b1bcf096a74bf0a79fae3f884dc1d0803e4 ]]
-git -C /var/www/bookstack describe --tags --exact-match |
+git -c safe.directory=/var/www/bookstack -C /var/www/bookstack \
+    describe --tags --exact-match |
     grep -Fxq "$version"
 /usr/local/sbin/bookstack-update --verify-installed >/dev/null
 composer --working-dir=/var/www/bookstack check-platform-reqs --no-dev

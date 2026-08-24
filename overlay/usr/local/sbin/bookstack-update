@@ -24,6 +24,10 @@ fail() {
     exit 1
 }
 
+app_git() {
+    git -c safe.directory="$webroot" -C "$webroot" "$@"
+}
+
 prepare_verifier() {
     temporary=$(mktemp -d /run/bookstack-update.XXXXXX)
     chmod 0700 "$temporary"
@@ -38,11 +42,11 @@ prepare_verifier() {
 verify_installed() {
     local version commit tagged
     version=$(<"$webroot/version")
-    commit=$(git -C "$webroot" rev-parse HEAD)
-    tagged=$(git -C "$webroot" rev-parse "$version^{commit}")
+    commit=$(app_git rev-parse HEAD)
+    tagged=$(app_git rev-parse "$version^{commit}")
     [[ $commit == "$tagged" ]] || fail 'installed commit does not match version tag'
     prepare_verifier
-    git -C "$webroot" verify-tag "$version" >/dev/null 2>&1 ||
+    app_git verify-tag "$version" >/dev/null 2>&1 ||
         fail "tag $version is not signed by the pinned upstream key"
     printf 'installed_version=%s\ninstalled_commit=%s\nsignature_fingerprint=%s\n' \
         "$version" "$commit" "$fingerprint"
@@ -50,7 +54,7 @@ verify_installed() {
 
 load_candidate() {
     local remote refs
-    remote=$(git -C "$webroot" remote get-url origin)
+    remote=$(app_git remote get-url origin)
     [[ $remote == https://source.bookstackapp.com/bookstack.git ]] ||
         fail "unexpected upstream remote: $remote"
 
@@ -82,7 +86,7 @@ load_candidate() {
 check_update() {
     local current_version current_commit
     current_version=$(<"$webroot/version")
-    current_commit=$(git -C "$webroot" rev-parse HEAD)
+    current_commit=$(app_git rev-parse HEAD)
     load_candidate
     printf 'current_version=%s\ncurrent_commit=%s\n' \
         "$current_version" "$current_commit"
@@ -98,28 +102,31 @@ check_update() {
 apply_update() {
     local fetched
     [[ $(id -u) -eq 0 ]] || fail 'updates must run as root'
-    git -C "$webroot" diff --quiet || fail 'tracked source changes are present'
-    git -C "$webroot" diff --cached --quiet ||
+    app_git diff --quiet || fail 'tracked source changes are present'
+    app_git diff --cached --quiet ||
         fail 'staged source changes are present'
     load_candidate
 
     /usr/local/bin/turnkey-artisan down --retry=30
     maintenance=true
-    runuser --user www-data -- git -C "$webroot" fetch origin \
+    runuser --user www-data -- git -c safe.directory="$webroot" \
+        -C "$webroot" fetch origin \
         "refs/tags/$candidate_version:refs/tags/$candidate_version"
-    git -C "$webroot" verify-tag "$candidate_version" >/dev/null 2>&1 ||
+    app_git verify-tag "$candidate_version" >/dev/null 2>&1 ||
         fail "fetched tag $candidate_version failed signature verification"
-    runuser --user www-data -- git -C "$webroot" fetch origin release
-    fetched=$(git -C "$webroot" rev-parse FETCH_HEAD)
+    runuser --user www-data -- git -c safe.directory="$webroot" \
+        -C "$webroot" fetch origin release
+    fetched=$(app_git rev-parse FETCH_HEAD)
     [[ $fetched == "$candidate_commit" ]] ||
         fail 'stable release changed during update; retry after review'
-    runuser --user www-data -- git -C "$webroot" merge --ff-only FETCH_HEAD
+    runuser --user www-data -- git -c safe.directory="$webroot" \
+        -C "$webroot" merge --ff-only FETCH_HEAD
     (cd "$webroot" && turnkey-composer install --no-dev --no-interaction)
     /usr/local/bin/turnkey-artisan migrate --force --no-interaction
     /usr/local/bin/turnkey-artisan cache:clear
     /usr/local/bin/turnkey-artisan config:clear
     /usr/local/bin/turnkey-artisan view:clear
-    [[ $(git -C "$webroot" rev-parse HEAD) == "$candidate_commit" ]] ||
+    [[ $(app_git rev-parse HEAD) == "$candidate_commit" ]] ||
         fail 'updated source commit differs from verified candidate'
     printf 'updated_version=%s\nupdated_commit=%s\n' \
         "$(<"$webroot/version")" "$candidate_commit"
