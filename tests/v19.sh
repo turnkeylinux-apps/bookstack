@@ -45,7 +45,10 @@ git -c safe.directory=/var/www/bookstack -C /var/www/bookstack \
     describe --tags --exact-match |
     grep -Fxq "$version"
 /usr/local/sbin/bookstack-update --verify-installed >/dev/null
-composer --working-dir=/var/www/bookstack check-platform-reqs --no-dev
+GIT_CONFIG_COUNT=1 \
+GIT_CONFIG_KEY_0=safe.directory \
+GIT_CONFIG_VALUE_0=/var/www/bookstack \
+    composer --working-dir=/var/www/bookstack check-platform-reqs --no-dev
 php_version=$(php --version | head -n 1)
 [[ $php_version == 'PHP 8.4.'* ]]
 for module in curl dom gd mbstring mysqli pdo_mysql xml zip; do
@@ -119,11 +122,10 @@ MYSQL_PWD=$db_password mariadb --user=root --batch --skip-column-names \
     "SELECT CONCAT(b.name, '|', p.name) FROM entities b JOIN entities p ON p.book_id=b.id JOIN entity_page_data pd ON pd.page_id=p.id WHERE b.type='book' AND p.type='page' AND b.name='$book_name' AND p.name='$page_name' AND pd.draft=0" |
     grep -Fxq "$book_name|$page_name"
 turnkey-artisan migrate:status --no-interaction >/dev/null
-grep -Fxq '* * * * * www-data /usr/local/bin/turnkey-artisan schedule:run --no-interaction >/dev/null 2>&1' \
+grep -Fxq '* * * * * root /usr/local/bin/turnkey-artisan schedule:run --no-interaction >/dev/null 2>&1' \
     /etc/cron.d/bookstack
 stat -c '%U:%G %a' /etc/cron.d/bookstack | grep -Fxq 'root:root 644'
-runuser --user www-data -- /usr/local/bin/turnkey-artisan \
-    schedule:run --no-interaction >"$scheduler"
+/usr/local/bin/turnkey-artisan schedule:run --no-interaction >"$scheduler"
 
 dpkg-query -W adminer webmin-apache webmin-mysql webmin-phpini postfix \
     >/dev/null
