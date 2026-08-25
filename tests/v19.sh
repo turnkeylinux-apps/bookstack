@@ -116,7 +116,7 @@ grep -Fq "$page_content" "$page"
 
 MYSQL_PWD=$db_password mariadb --user=root --batch --skip-column-names \
     bookstack --execute \
-    "SELECT CONCAT(b.name, '|', p.name) FROM books b JOIN pages p ON p.book_id=b.id WHERE b.name='$book_name' AND p.name='$page_name' AND p.draft=0" |
+    "SELECT CONCAT(b.name, '|', p.name) FROM entities b JOIN entities p ON p.book_id=b.id JOIN entity_page_data pd ON pd.page_id=p.id WHERE b.type='book' AND p.type='page' AND b.name='$book_name' AND p.name='$page_name' AND pd.draft=0" |
     grep -Fxq "$book_name|$page_name"
 turnkey-artisan migrate:status --no-interaction >/dev/null
 grep -Fxq '* * * * * www-data /usr/local/bin/turnkey-artisan schedule:run --no-interaction >/dev/null 2>&1' \
