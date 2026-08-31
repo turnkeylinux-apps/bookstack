@@ -1,51 +1,57 @@
-#!/bin/bash -ex
+#!/bin/bash
+set -Eeuo pipefail
 
 DB_NAME=bookstack
 DB_USER=bookstack
 DB_PASS=$(mcookie)
 
-ADMIN_MAIL="admin@example.com"
-ADMIN_PASS=turnkey1
-APP_DOMAIN=www.example.com
-
-SRC=/usr/local/src
 WEBROOT=/var/www/bookstack
 CONF=$WEBROOT/.env
+BOOKSTACK_VERSION=v26.05.4
+BOOKSTACK_TAG_OBJECT=bb71d0f5e539cd853381125a86772813e73aee3d
+BOOKSTACK_COMMIT=cec78b1bcf096a74bf0a79fae3f884dc1d0803e4
+BOOKSTACK_SOURCE=https://source.bookstackapp.com/bookstack.git
 
-# initial install
-git clone https://github.com/BookStackApp/BookStack.git \
-    --branch release --single-branch --depth=1 $WEBROOT
-chown -R www-data:www-data $WEBROOT
-cd $WEBROOT
+# Install the immutable signed release while retaining the official remote for
+# BookStack's supported stable-channel updater.
+git clone --branch "$BOOKSTACK_VERSION" --single-branch --depth=1 \
+    "$BOOKSTACK_SOURCE" "$WEBROOT"
+test "$(git -C "$WEBROOT" rev-parse HEAD)" = "$BOOKSTACK_COMMIT"
+test "$(git -C "$WEBROOT" rev-parse "$BOOKSTACK_VERSION^{tag}")" = \
+    "$BOOKSTACK_TAG_OBJECT"
+test "$(git -C "$WEBROOT" rev-parse "$BOOKSTACK_VERSION^{commit}")" = \
+    "$BOOKSTACK_COMMIT"
+/usr/local/sbin/bookstack-update --verify-installed
+
+chown -R www-data:www-data "$WEBROOT"
+cd "$WEBROOT"
 turnkey-composer install --no-dev
 
-# instal config setup
-cp $CONF.example $CONF
-sed -i "\|^DB_DATABASE=| s|=.*|=$DB_NAME|" $CONF
-sed -i "\|^DB_USERNAME=| s|=.*|=$DB_USER|" $CONF
-sed -i "\|^DB_PASSWORD=| s|=.*|=$DB_PASS|" $CONF
-sed -i "\|^MAIL_DRIVER=| s|=.*|=sendmail|" $CONF
-sed -i "\|^MAIL_FROM_NAME=| s|=.*|=\"TurnKey BookStack\"|" $CONF
-chown www-data:www-data $CONF
+# Configure instance state.
+cp "$CONF.example" "$CONF"
+sed -i "\|^DB_DATABASE=| s|=.*|=$DB_NAME|" "$CONF"
+sed -i "\|^DB_USERNAME=| s|=.*|=$DB_USER|" "$CONF"
+sed -i "\|^DB_PASSWORD=| s|=.*|=$DB_PASS|" "$CONF"
+sed -i "\|^MAIL_DRIVER=| s|=.*|=sendmail|" "$CONF"
+sed -i "\|^MAIL_FROM_NAME=| s|=.*|=\"TurnKey BookStack\"|" "$CONF"
+chown www-data:www-data "$CONF"
+chmod 0640 "$CONF"
 
-# set up DB
+# Set up the application database.
 service mysql start
-mysqladmin create $DB_NAME
-mysql --batch --execute "grant all privileges on $DB_NAME.* to $DB_USER@localhost identified by '$DB_PASS'; flush privileges;"
+mysql --batch --execute "CREATE DATABASE $DB_NAME CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci; CREATE USER '$DB_USER'@'localhost' IDENTIFIED BY '$DB_PASS'; GRANT ALL PRIVILEGES ON $DB_NAME.* TO '$DB_USER'@'localhost'; FLUSH PRIVILEGES;"
 
-# update turnkey-artisan command and finailse install
+# Point the appliance helper at BookStack and finish the initial migration.
 BIN=/usr/local/bin
-sed -i "\|^export WEBROOT=| s|=.*|=\"$WEBROOT\"|" $BIN/turnkey-artisan
+sed -i "\|^export WEBROOT=| s|=.*|=\"$WEBROOT\"|" \
+    "$BIN/turnkey-artisan"
 turnkey-artisan key:generate --force --no-interaction
 turnkey-artisan migrate --force --no-interaction
 
-# leverage inithook to do initial admin user config & domain
-#/usr/lib/inithooks/bin/bookstack.py --email="$ADMIN_EMAIL" --pass="$ADMIN_PASS" --domain="$APP_DOMAIN"
-
-# apache config
+# Configure Apache.
 a2dissite 000-default
 a2ensite bookstack
 a2enmod rewrite
 
-# finish up
+# Finish with database services stopped for image cleanup.
 service mysql stop

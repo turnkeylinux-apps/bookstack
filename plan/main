@@ -1,9 +1,9 @@
 #include <turnkey/base>
 #include <turnkey/lamp>
 
-python3-bcrypt
 php-xml
 php-curl
 php-gd
 php-mbstring
-libapache2-mod-security2
+php-zip
+gpg
